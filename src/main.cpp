@@ -1,11 +1,3 @@
-// #include <Arduino.h>
-
-// #include "led.hpp"
-
-// void setup() { }
-
-// void loop() { }
-
 #ifdef ESP32
     #include <WiFi.h>
 #else
@@ -15,12 +7,15 @@
 #include <UniversalTelegramBot.h>  // Universal Telegram Bot Library written by Brian Lough: https://github.com/witnessmenow/Universal-Arduino-Telegram-Bot
 #include <ArduinoJson.h>
 
+#include "../lib/proxy/servo.hpp"
+
 // Replace with your network credentials
 const char* ssid = "";
 const char* password = "";
 
 // Initialize Telegram BOT
 #define BOTtoken ""  // your Bot Token (Get from Botfather)
+#define SERVO_COUNT 3
 
 // Use @myidbot to find out the chat ID of an individual or a group
 // Also note that you need to click "start" on a bot before it can
@@ -33,6 +28,11 @@ X509List cert(TELEGRAM_CERTIFICATE_ROOT);
 
 WiFiClientSecure     client;
 UniversalTelegramBot bot(BOTtoken, client);
+proxy::Servo servos[SERVO_COUNT] = {
+    proxy::Servo(proxy::Servo::Config{hal::Pwm::Config{.pin=15, .frequency=50}, 180.0f, 0.0f}),
+    proxy::Servo(proxy::Servo::Config{hal::Pwm::Config{.pin=5, .frequency=50}, 180.0f, 0.0f}),
+    proxy::Servo(proxy::Servo::Config{hal::Pwm::Config{.pin=5, .frequency=50}, 180.0f, 0.0f}),
+};
 
 // Checks for new messages every 1 second.
 int           botRequestDelay = 1000;
@@ -142,6 +142,27 @@ void handleNewMessages(int numNewMessages) {
                 }
             } else {
                 bot.sendMessage(chat_id, "Formato inválido. Use /alarme HH:MM", "");
+            }
+        }
+        else if (text.startsWith("/servo ")) {
+            String arg = text.substring(7);
+            int idx = arg.toInt();
+            if (idx < 0 || idx >= SERVO_COUNT) {
+                bot.sendMessage(chat_id, "Índice inválido. Use /servo 0, /servo 1 ou /servo 2", "");
+            } else {
+                String msg = "Acionando servo " + String(idx);
+                bot.sendMessage(chat_id, msg, "");
+                Serial.println(msg);
+                float previous = servos[idx].get_angle();
+                float center = servos[idx].get_max_angle() / 2.0f;
+                float angle_neg90 = center - 90.0f; // -90° relativo ao centro
+                float angle_pos90 = center + 90.0f; // +90° relativo ao centro
+                // Movimento de teste: vai para 90º por 1s e volta para 0º
+                servos[idx].set_angle(angle_pos90);
+                delay(3000);
+                servos[idx].set_angle(previous);
+
+                bot.sendMessage(chat_id, "Teste completo no servo " + String(idx), "");
             }
         }
     }
