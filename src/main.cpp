@@ -7,14 +7,27 @@
 #include <UniversalTelegramBot.h>  // Universal Telegram Bot Library written by Brian Lough: https://github.com/witnessmenow/Universal-Arduino-Telegram-Bot
 #include <ArduinoJson.h>
 
+#include <ESP32Servo.h>
+
+#include <time.h>
+
 #include "../lib/proxy/servo.hpp"
 
 // Replace with your network credentials
-const char* ssid = "";
-const char* password = "";
+const char* ssid = " ";
+const char* password = " ";
+
+// NTP server details
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = -10800;  // UTC-3 (Brazil) = -3 * 3600 seconds
+const int   daylightOffset_sec = 0;  // Brazil doesn't use daylight saving time anymore
+
+// Global timeinfo struct and last sync timestamp
+struct tm     timeinfo;
+unsigned long lastSyncMillis = 0;  // Last sync time in milliseconds
 
 // Initialize Telegram BOT
-#define BOTtoken ""  // your Bot Token (Get from Botfather)
+#define BOTtoken " "  // your Bot Token (Get from Botfather)
 #define SERVO_COUNT 3
 
 // Use @myidbot to find out the chat ID of an individual or a group
@@ -28,11 +41,9 @@ X509List cert(TELEGRAM_CERTIFICATE_ROOT);
 
 WiFiClientSecure     client;
 UniversalTelegramBot bot(BOTtoken, client);
-proxy::Servo servos[SERVO_COUNT] = {
-    proxy::Servo(proxy::Servo::Config{hal::Pwm::Config{.pin=15, .frequency=50}, 180.0f, 0.0f}),
-    proxy::Servo(proxy::Servo::Config{hal::Pwm::Config{.pin=5, .frequency=50}, 180.0f, 0.0f}),
-    proxy::Servo(proxy::Servo::Config{hal::Pwm::Config{.pin=5, .frequency=50}, 180.0f, 0.0f}),
-};
+
+Servo     meuServo;
+const int pinoServo = 15;
 
 // Checks for new messages every 1 second.
 int           botRequestDelay = 1000;
@@ -143,33 +154,65 @@ void handleNewMessages(int numNewMessages) {
             } else {
                 bot.sendMessage(chat_id, "Formato inválido. Use /alarme HH:MM", "");
             }
-        }
-        else if (text.startsWith("/servo ")) {
+        } else if (text.startsWith("/servo ")) {
             String arg = text.substring(7);
-            int idx = arg.toInt();
-            if (idx < 0 || idx >= SERVO_COUNT) {
-                bot.sendMessage(chat_id, "Índice inválido. Use /servo 0, /servo 1 ou /servo 2", "");
-            } else {
-                String msg = "Acionando servo " + String(idx);
-                bot.sendMessage(chat_id, msg, "");
-                Serial.println(msg);
-                float previous = servos[idx].get_angle();
-                float center = servos[idx].get_max_angle() / 2.0f;
-                float angle_neg90 = center - 90.0f; // -90° relativo ao centro
-                float angle_pos90 = center + 90.0f; // +90° relativo ao centro
-                // Movimento de teste: vai para 90º por 1s e volta para 0º
-                servos[idx].set_angle(angle_pos90);
-                delay(3000);
-                servos[idx].set_angle(previous);
+            int    idx = arg.toInt();
 
-                bot.sendMessage(chat_id, "Teste completo no servo " + String(idx), "");
-            }
+            String msg = "Acionando servo " + String(idx);
+            bot.sendMessage(chat_id, msg, "");
+            Serial.println(msg);
+
+            meuServo.write(idx);
+            Serial.println("Servo posicionado em " + String(idx) + " graus.");
+
+            bot.sendMessage(chat_id, "Teste completo no servo " + String(idx), "");
+            // }
+        } else if (text == "/liberar") {
+            String msg = "Liberando caixinha!";
+            bot.sendMessage(chat_id, msg, "");
+            Serial.println(msg);
+
+            meuServo.write(140);
+            delay(1000);
+            meuServo.write(95);
+
+            msg = "Caixinha liberada!";
+            bot.sendMessage(chat_id, msg, "");
+            Serial.println(msg);
         }
+    }
+}
+
+void syncTime() {
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);  // Configure time with NTP server
+    if (!getLocalTime(&timeinfo)) {
+        Serial.println("Failed to obtain time");
+        return;
+    }
+    Serial.println("\nESP32 Time synchronized with NTP server.");
+    Serial.print("Current time: ");
+    Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+
+    //   // Sync the RTC with the NTP time
+    //   rtc.adjust(DateTime(timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+    //                       timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec));
+
+    lastSyncMillis = millis();  // Record the last sync time in milliseconds
+}
+
+void checkTimeAndSync() {
+    // Check if 10 seconds have passed since the last sync (10 seconds = 10000 milliseconds)
+    if (millis() - lastSyncMillis >= 10000) {
+        Serial.println("Synchronizing time with NTP...");
+        syncTime();
     }
 }
 
 void setup() {
     Serial.begin(9600);
+
+    meuServo.attach(pinoServo);
+    meuServo.write(95);
 
 #ifdef ESP8266
     configTime(0, 0, "pool.ntp.org");  // get UTC time via NTP
@@ -190,10 +233,16 @@ void setup() {
         Serial.println("Connecting to WiFi..");
     }
     // Print ESP32 Local IP Address
+    Serial.println("Connected to the WiFi network");
     Serial.println(WiFi.localIP());
 }
 
 void loop() {
+    checkTimeAndSync();
+
+    // print current time
+    // Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+
     if (millis() > lastTimeBotRan + botRequestDelay) {
         int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
 
